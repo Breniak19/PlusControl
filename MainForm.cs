@@ -801,7 +801,7 @@ namespace PlusControl.Pro
 
         // === CONTROLES UI ===
         private System.Windows.Forms.Timer? _monitorTimer;
-        private System.Windows.Forms.Timer? _processTimer; // NUEVO TIMER DE FOCO
+        // NOTA: Se eliminó _processTimer ya que ahora usamos FocusLoop en segundo plano
         private NotifyIcon? _trayIcon;
         private Label? _lblStatus, _lblTempStatus;
         private ListBox? _lstReglas;
@@ -876,11 +876,11 @@ namespace PlusControl.Pro
         }
 
         // ==============================================================
-        // SEPARACIÓN DE RELOJES (EL ARREGLO PRINCIPAL)
+        // SEPARACIÓN DE RELOJES Y LOOP ASÍNCRONO DE FOCO (EL FIX)
         // ==============================================================
         private void InitializeTimer()
         {
-            // 1. Reloj de Hardware Térmico (Controlado por la config del usuario, ej. 1000ms o 2000ms)
+            // 1. Reloj de Hardware Térmico (Sigue la config del usuario para gráficos)
             _monitorTimer = new System.Windows.Forms.Timer
             {
                 Interval = _configService.Config.TickRate > 0 ? _configService.Config.TickRate : 1000
@@ -888,29 +888,41 @@ namespace PlusControl.Pro
             _monitorTimer.Tick += MonitorTick;
             _monitorTimer.Start();
 
-            // 2. Reloj de Detección de Foco (Fijo, ultra rápido a 10ms)
-            // Esto garantiza que PlusControl aplique el Delay general o el Delay1y2 exacto
-            // que configuraste, sin tener que esperar a que el sensor de temperatura dé la vuelta.
-            _processTimer = new System.Windows.Forms.Timer
+            // 2. Reloj de Detección de Foco (Bucle en segundo plano, no bloquea la interfaz)
+            Task.Run(FocusLoop);
+        }
+
+        private async Task FocusLoop()
+        {
+            while (!_isExiting)
             {
-                Interval = 10
-            };
-            _processTimer.Tick += ProcessTick;
-            _processTimer.Start();
+                try
+                {
+                    var foregroundProc = _processService.GetForegroundProcess();
+                    if (foregroundProc != null)
+                    {
+                        var currentProcess = foregroundProc.ProcessName;
+                        if (currentProcess != _lastProcessName)
+                        {
+                            HandleProcessChangeFast(foregroundProc, currentProcess);
+                        }
+                    }
+                }
+                catch { }
+
+                // Muestreo ultra rápido (50ms) sin bloquear la interfaz
+                await Task.Delay(50);
+            }
         }
 
         private async void MonitorTick(object? sender, EventArgs e)
         {
-            // Pausar el temporizador para evitar colisiones si la lectura de hardware tarda mucho
+            // Pausar para evitar colisiones
             _monitorTimer?.Stop();
 
             try
             {
-                // =====================================================================
-                // EL FIX DEFINITIVO: Mover la lectura de hardware (que es pesada) a un hilo de fondo.
-                // Así NUNCA bloquea el hilo principal de la UI, permitiendo que 
-                // ProcessTick y los Delays finalicen en su momento matemático exacto.
-                // =====================================================================
+                // LECTURA DE HARDWARE EN SEGUNDO PLANO (Evita que la app se congele)
                 await Task.Run(() => _hardwareService.Update());
 
                 var currentTemp = _hardwareService.CurrentTemperature;
@@ -931,28 +943,11 @@ namespace PlusControl.Pro
             }
             finally
             {
-                // Reanudar el temporizador
                 _monitorTimer?.Start();
             }
         }
 
-        private async void ProcessTick(object? sender, EventArgs e)
-        {
-            // Solo monitorea el foco actual con gran velocidad
-            var foregroundProc = _processService.GetForegroundProcess();
-            if (foregroundProc != null)
-            {
-                var currentProcess = foregroundProc.ProcessName;
-
-                if (currentProcess != _lastProcessName)
-                {
-                    await HandleProcessChange(foregroundProc, currentProcess);
-                }
-            }
-        }
-        // ==============================================================
-
-        private async Task HandleProcessChange(ProcessInfo process, string currentProcess)
+        private void HandleProcessChangeFast(ProcessInfo process, string currentProcess)
         {
             this.InvokeIfRequired(() =>
                 _lblStatus!.Text = $"Focus: [{currentProcess}] -> Evaluando...");
@@ -964,8 +959,6 @@ namespace PlusControl.Pro
                     _configService.Config.Reglas[_lastProcessName]);
             }
 
-            // Al actualizar esto aquí, aseguramos que el Timer de Foco no vuelva
-            // a disparar este evento mientras esperamos el "Delay" configurado abajo.
             _lastProcessName = currentProcess;
             _isStableAppConfigured = false;
             _heatCounter = 0;
@@ -993,17 +986,20 @@ namespace PlusControl.Pro
                 delay = _configService.Config.Delay1y2;
             }
 
-            try
+            // Ejecutar el Delay y la aplicación en un hilo independiente (Fuego y Olvido)
+            Task.Run(async () =>
             {
-                // Este Delay ahora será EXACTO y no se retrasará por culpa de la temperatura.
-                await Task.Delay(delay, token);
-
-                if (!token.IsCancellationRequested)
+                try
                 {
-                    this.InvokeIfRequired(() => ApplyBaseProfile(process, targetHotkey, isManagedRule));
+                    await Task.Delay(delay, token);
+
+                    if (!token.IsCancellationRequested)
+                    {
+                        this.InvokeIfRequired(() => ApplyBaseProfile(process, targetHotkey, isManagedRule));
+                    }
                 }
-            }
-            catch (TaskCanceledException) { }
+                catch (TaskCanceledException) { }
+            }, token);
         }
 
         private void ApplyBaseProfile(ProcessInfo process, string hotkey, bool isManagedRule)
@@ -1040,8 +1036,11 @@ namespace PlusControl.Pro
                 ShowNotification($"Perfil: {GetProfileName(hotkey)}", process.ProcessName);
             }
 
+            // REFLEJO INMEDIATO EN LA INTERFAZ
             UpdateStatusLabel(process.ProcessName);
+            UpdateTrayIcon(_hardwareService.CurrentTemperature); // Fuerza a dibujar el nuevo perfil al instante
         }
+        // ==============================================================
 
         private void ProcessThermalControl(float temp)
         {
@@ -1138,6 +1137,8 @@ namespace PlusControl.Pro
                 return;
             }
 
+            _isExiting = true; // Fundamental para que el Task.Run del FocusLoop se detenga correctamente
+
             if (_configService.Config.RestaurarAlSalir)
             {
                 foreach (var procName in _configService.Config.Reglas.Keys)
@@ -1147,7 +1148,6 @@ namespace PlusControl.Pro
             }
 
             _monitorTimer?.Stop();
-            _processTimer?.Stop();
             _hardwareService.Dispose();
             _trayIcon?.Dispose();
             _configService.Save();
@@ -1760,8 +1760,6 @@ namespace PlusControl.Pro
 
                 SaveCurrentConfig();
                 form.Close();
-
-                _logger.LogInfo("Ajustes guardados");
             };
 
             form.Controls.Add(btnSave);
