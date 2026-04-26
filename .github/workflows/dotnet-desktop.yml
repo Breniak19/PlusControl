@@ -1,0 +1,43 @@
+name: Compilar y Publicar PlusControl
+
+on:
+  push:
+    branches: [ "master", "main" ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Descargar el código
+      uses: actions/checkout@v4
+
+    - name: Configurar .NET 8
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Compilar y empaquetar en un solo archivo (Single-File)
+      # Publica en la carpeta temporal 'publish_output'
+      run: dotnet publish -c Release -r win-x64 -p:PublishSingleFile=true --self-contained false -o ./publish_output
+
+    - name: Crear Tag y Lanzamiento
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: v2.0.${{ github.run_number }}
+        name: PlusControl PRO v2.0.${{ github.run_number }}
+        body: |
+          🧠 **Nueva versión de PlusControl compilada automáticamente.**
+          
+          - Gestor inteligente de perfiles térmicos y rendimiento.
+          - Interfaz moderna oscura.
+          - Se comunica invisiblemente con el motor de hardware (PC_F).
+          - Empaquetado como un solo archivo (.exe) para Windows x64.
+        draft: false
+        prerelease: false
+        # Apunta al nombre del ejecutable que genera tu proyecto (asumiendo que se llama PlusControl.exe)
+        files: './publish_output/PlusControl.exe'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
