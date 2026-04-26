@@ -888,7 +888,7 @@ namespace PlusControl.Pro
             _monitorTimer.Tick += MonitorTick;
             _monitorTimer.Start();
 
-            // 2. Reloj de Detección de Foco (Fijo, ultra rápido a 150ms)
+            // 2. Reloj de Detección de Foco (Fijo, ultra rápido a 10ms)
             // Esto garantiza que PlusControl aplique el Delay general o el Delay1y2 exacto
             // que configuraste, sin tener que esperar a que el sensor de temperatura dé la vuelta.
             _processTimer = new System.Windows.Forms.Timer
@@ -899,21 +899,41 @@ namespace PlusControl.Pro
             _processTimer.Start();
         }
 
-        private void MonitorTick(object? sender, EventArgs e)
+        private async void MonitorTick(object? sender, EventArgs e)
         {
-            // Solo monitorea Hardware y actualiza gráficos
-            _hardwareService.Update();
-            var currentTemp = _hardwareService.CurrentTemperature;
-            UpdateTemperatureDisplay(currentTemp);
-            _statistics.RecordTemperature(currentTemp);
+            // Pausar el temporizador para evitar colisiones si la lectura de hardware tarda mucho
+            _monitorTimer?.Stop();
 
-            if (_configService.Config.ControlTermico.Enabled &&
-                _isStableAppConfigured && currentTemp > 0)
+            try
             {
-                ProcessThermalControl(currentTemp);
-            }
+                // =====================================================================
+                // EL FIX DEFINITIVO: Mover la lectura de hardware (que es pesada) a un hilo de fondo.
+                // Así NUNCA bloquea el hilo principal de la UI, permitiendo que 
+                // ProcessTick y los Delays finalicen en su momento matemático exacto.
+                // =====================================================================
+                await Task.Run(() => _hardwareService.Update());
 
-            UpdateTrayIcon(currentTemp);
+                var currentTemp = _hardwareService.CurrentTemperature;
+                UpdateTemperatureDisplay(currentTemp);
+                _statistics.RecordTemperature(currentTemp);
+
+                if (_configService.Config.ControlTermico.Enabled &&
+                    _isStableAppConfigured && currentTemp > 0)
+                {
+                    ProcessThermalControl(currentTemp);
+                }
+
+                UpdateTrayIcon(currentTemp);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError("Error en MonitorTick", ex);
+            }
+            finally
+            {
+                // Reanudar el temporizador
+                _monitorTimer?.Start();
+            }
         }
 
         private async void ProcessTick(object? sender, EventArgs e)
@@ -975,7 +995,7 @@ namespace PlusControl.Pro
 
             try
             {
-                // Este Delay ahora será EXACTO, independiente de la temperatura.
+                // Este Delay ahora será EXACTO y no se retrasará por culpa de la temperatura.
                 await Task.Delay(delay, token);
 
                 if (!token.IsCancellationRequested)
