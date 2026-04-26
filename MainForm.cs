@@ -7,7 +7,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
-using System.IO.Pipes; // NUEVA LIBRERÍA PARA PC_F
+using System.IO.Pipes; // LIBRERÍA PARA PC_F
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -19,7 +19,7 @@ using System.Windows.Forms;
 
 namespace PlusControl.Pro
 {
-    // ======= UpdateVisitor (corrección) =======
+    // ======= UpdateVisitor =======
     public class UpdateVisitor : IVisitor
     {
         public void VisitComputer(IComputer computer)
@@ -340,7 +340,7 @@ namespace PlusControl.Pro
     public interface IProcessManagerService
     {
         ProcessInfo? GetForegroundProcess();
-        void ApplyProfile(ProcessInfo process, PerfilConfig config, bool isManagedRule = false); // MODIFICADO: Flag de regla
+        void ApplyProfile(ProcessInfo process, PerfilConfig config, bool isManagedRule = false);
         void ApplyBackgroundState(string processName, PerfilConfig config);
         void RestoreProcess(string processName);
         void AplicarPerfilHardware(string legacyHotkey);
@@ -429,7 +429,6 @@ namespace PlusControl.Pro
                     if (proc.PriorityClass == ProcessPriorityClass.Idle)
                         proc.PriorityClass = ProcessPriorityClass.Normal;
                 }
-                // IMPORTANTE: Si !isManagedRule (procesos del sistema sin regla), NO TOCAMOS la prioridad.
 
                 // EVITAR TOCAR LA AFINIDAD DE PROCESOS NO GESTIONADOS
                 if (config.AfinidadActiva.HasValue)
@@ -500,27 +499,23 @@ namespace PlusControl.Pro
         }
 
         // ==============================================================
-        // NUEVA LÓGICA DE PC_F (Reemplaza a los atajos de teclado)
+        // NUEVA LÓGICA DE PC_F
         // ==============================================================
         public void AplicarPerfilHardware(string legacyHotkey)
         {
-            // Traducimos los viejos atajos de teclado que tienes guardados
-            // en tu JSON a los nuevos IDs numéricos de PC_F (1 al 4)
-            int perfilId = 3; // Por defecto modo Equilibrado (Perfil 3)
+            int perfilId = 3;
 
             if (legacyHotkey == "%{NUMPAD1}") perfilId = 1;
             else if (legacyHotkey == "%{NUMPAD2}") perfilId = 2;
             else if (legacyHotkey == "%{NUMPAD3}") perfilId = 3;
             else if (legacyHotkey == "%{NUMPAD4}") perfilId = 4;
 
-            // Se ejecuta de forma asíncrona para no trabar jamás a PlusControl
             Task.Run(() =>
             {
                 try
                 {
                     using (NamedPipeClientStream pipeClient = new NamedPipeClientStream(".", "PlusControlPipe", PipeDirection.Out))
                     {
-                        // Espera máximo 500ms para conectar. Si PC_F está cerrado, no pasa nada, se ignora.
                         pipeClient.Connect(500);
 
                         using (StreamWriter writer = new StreamWriter(pipeClient))
@@ -617,13 +612,11 @@ namespace PlusControl.Pro
                     MigrateConfig(data);
                     _config = data;
 
-                    // Validar configuración cargada
                     ValidateConfig();
                 }
             }
             catch
             {
-                // Si falla la carga, crear nueva config por defecto
                 _config = new PlusControlData();
                 CreateDefaultRules();
             }
@@ -649,7 +642,7 @@ namespace PlusControl.Pro
 
         public void ImportFromFile(string path)
         {
-            CreateBackup(); // Backup antes de importar
+            CreateBackup();
             var json = File.ReadAllText(path);
             var imported = JsonSerializer.Deserialize<PlusControlData>(json, _jsonOptions);
             if (imported != null)
@@ -661,10 +654,8 @@ namespace PlusControl.Pro
 
         private void MigrateConfig(PlusControlData data)
         {
-            // Migración de versión 1 a 2
             if (data.Version < 2)
             {
-                // Corregir formatos antiguos de atajos
                 FixOldHotkeys(data);
                 data.Version = 2;
             }
@@ -689,7 +680,6 @@ namespace PlusControl.Pro
 
         private void ValidateConfig()
         {
-            // Asegurar valores dentro de rangos válidos
             _config.TickRate = Math.Clamp(_config.TickRate, 100, 5000);
             _config.DelayGeneral = Math.Clamp(_config.DelayGeneral, 0, 10000);
             _config.ControlTermico.TempAlta = Math.Clamp(_config.ControlTermico.TempAlta, 60, 100);
@@ -700,7 +690,7 @@ namespace PlusControl.Pro
         {
             _config.Reglas["steam"] = new PerfilConfig
             {
-                Atajo = "%{NUMPAD1}", // Mantengo el string viejo para compatibilidad de tu JSON
+                Atajo = "%{NUMPAD1}",
                 Prioridad = ProcessPriorityClass.High,
                 Notas = "Steam - Detectado automáticamente"
             };
@@ -811,6 +801,7 @@ namespace PlusControl.Pro
 
         // === CONTROLES UI ===
         private System.Windows.Forms.Timer? _monitorTimer;
+        private System.Windows.Forms.Timer? _processTimer; // NUEVO TIMER DE FOCO
         private NotifyIcon? _trayIcon;
         private Label? _lblStatus, _lblTempStatus;
         private ListBox? _lstReglas;
@@ -829,9 +820,6 @@ namespace PlusControl.Pro
         // === OPCIONES ===
         private static readonly Dictionary<string, string> ProfileOptions = new()
         {
-            // Mantenemos los valores antiguos "%{NUMPAD1}" en código para que tus archivos
-            // de configuración JSON antiguos sigan siendo válidos y no se rompan.
-            // La función AplicarPerfilHardware() los traduce automáticamente para PC_F.
             {"MAX_PERFORMANCE / Perfil 1", "%{NUMPAD1}"},
             {"GAMING_ULTRA / Perfil 2", "%{NUMPAD2}"},
             {"BALANCED_TURBO / Perfil 3", "%{NUMPAD3}"},
@@ -852,7 +840,6 @@ namespace PlusControl.Pro
 
         public MainForm()
         {
-            // Inicializar servicios (DI Manual)
             var basePath = Application.StartupPath;
             _logger = new LoggerService(basePath);
             _configService = new ConfigurationService(basePath);
@@ -860,12 +847,10 @@ namespace PlusControl.Pro
             _processService = new ProcessManagerService(_logger);
             _statistics = new StatisticsService(_configService);
 
-            // Suscribirse a eventos
             _hardwareService.OnTemperatureChanged += OnTemperatureChanged;
             _logger.OnNuevoEvento += OnNewLogEvent;
             _configService.OnConfigChanged += OnConfigChanged;
 
-            // Configurar UI
             ConfigureDarkTheme();
             ConfigureSystemTray();
             InitializeTimer();
@@ -874,7 +859,6 @@ namespace PlusControl.Pro
             this.TopMost = _configService.Config.SiempreArriba;
             this.Opacity = _configService.Config.OpacidadVentana / 100.0;
 
-            // Eventos de carga
             this.Load += MainForm_Load;
             this.FormClosing += MainForm_FormClosing;
         }
@@ -891,25 +875,50 @@ namespace PlusControl.Pro
             }
         }
 
+        // ==============================================================
+        // SEPARACIÓN DE RELOJES (EL ARREGLO PRINCIPAL)
+        // ==============================================================
         private void InitializeTimer()
         {
+            // 1. Reloj de Hardware Térmico (Controlado por la config del usuario, ej. 1000ms o 2000ms)
             _monitorTimer = new System.Windows.Forms.Timer
             {
                 Interval = _configService.Config.TickRate > 0 ? _configService.Config.TickRate : 1000
             };
             _monitorTimer.Tick += MonitorTick;
             _monitorTimer.Start();
+
+            // 2. Reloj de Detección de Foco (Fijo, ultra rápido a 150ms)
+            // Esto garantiza que PlusControl aplique el Delay general o el Delay1y2 exacto
+            // que configuraste, sin tener que esperar a que el sensor de temperatura dé la vuelta.
+            _processTimer = new System.Windows.Forms.Timer
+            {
+                Interval = 10
+            };
+            _processTimer.Tick += ProcessTick;
+            _processTimer.Start();
         }
 
-        private async void MonitorTick(object? sender, EventArgs e)
+        private void MonitorTick(object? sender, EventArgs e)
         {
-            // 1. Actualizar temperatura
+            // Solo monitorea Hardware y actualiza gráficos
             _hardwareService.Update();
             var currentTemp = _hardwareService.CurrentTemperature;
             UpdateTemperatureDisplay(currentTemp);
             _statistics.RecordTemperature(currentTemp);
 
-            // 2. Detectar proceso foreground
+            if (_configService.Config.ControlTermico.Enabled &&
+                _isStableAppConfigured && currentTemp > 0)
+            {
+                ProcessThermalControl(currentTemp);
+            }
+
+            UpdateTrayIcon(currentTemp);
+        }
+
+        private async void ProcessTick(object? sender, EventArgs e)
+        {
+            // Solo monitorea el foco actual con gran velocidad
             var foregroundProc = _processService.GetForegroundProcess();
             if (foregroundProc != null)
             {
@@ -920,25 +929,14 @@ namespace PlusControl.Pro
                     await HandleProcessChange(foregroundProc, currentProcess);
                 }
             }
-
-            // 3. Procesar control térmico
-            if (_configService.Config.ControlTermico.Enabled &&
-                _isStableAppConfigured && currentTemp > 0)
-            {
-                ProcessThermalControl(currentTemp);
-            }
-
-            // 4. Actualizar icono bandeja
-            UpdateTrayIcon(currentTemp);
         }
+        // ==============================================================
 
         private async Task HandleProcessChange(ProcessInfo process, string currentProcess)
         {
-            // Actualizar UI instantáneamente
             this.InvokeIfRequired(() =>
                 _lblStatus!.Text = $"Focus: [{currentProcess}] -> Evaluando...");
 
-            // Aplicar estado fondo al proceso anterior
             if (!string.IsNullOrEmpty(_lastProcessName) &&
                 _configService.Config.Reglas.ContainsKey(_lastProcessName))
             {
@@ -946,6 +944,8 @@ namespace PlusControl.Pro
                     _configService.Config.Reglas[_lastProcessName]);
             }
 
+            // Al actualizar esto aquí, aseguramos que el Timer de Foco no vuelva
+            // a disparar este evento mientras esperamos el "Delay" configurado abajo.
             _lastProcessName = currentProcess;
             _isStableAppConfigured = false;
             _heatCounter = 0;
@@ -953,22 +953,19 @@ namespace PlusControl.Pro
 
             _statistics.RecordProcessDetected(currentProcess);
 
-            // Cancelar debounce anterior
             _debounceToken?.Cancel();
             _debounceToken = new CancellationTokenSource();
             var token = _debounceToken.Token;
 
-            // Determinar target profile
             string targetHotkey = _configService.Config.AtajoDefecto;
-            bool isManagedRule = false; // NUEVO: Bandera para saber si el proceso está en las reglas
+            bool isManagedRule = false;
 
             if (_configService.Config.Reglas.TryGetValue(currentProcess, out var rule))
             {
                 targetHotkey = rule.Atajo;
-                isManagedRule = true; // El proceso ES uno de los configurados
+                isManagedRule = true;
             }
 
-            // Calcular delay especial para transiciones rápidas 1 <-> 2
             int delay = _configService.Config.DelayGeneral;
             if ((_lastAppliedProfile == "%{NUMPAD1}" && targetHotkey == "%{NUMPAD2}") ||
                 (_lastAppliedProfile == "%{NUMPAD2}" && targetHotkey == "%{NUMPAD1}"))
@@ -978,14 +975,15 @@ namespace PlusControl.Pro
 
             try
             {
+                // Este Delay ahora será EXACTO, independiente de la temperatura.
                 await Task.Delay(delay, token);
 
                 if (!token.IsCancellationRequested)
                 {
-                    this.InvokeIfRequired(() => ApplyBaseProfile(process, targetHotkey, isManagedRule)); // Modificado
+                    this.InvokeIfRequired(() => ApplyBaseProfile(process, targetHotkey, isManagedRule));
                 }
             }
-            catch (TaskCanceledException) { /* Debounce cancelado */ }
+            catch (TaskCanceledException) { }
         }
 
         private void ApplyBaseProfile(ProcessInfo process, string hotkey, bool isManagedRule)
@@ -1000,7 +998,6 @@ namespace PlusControl.Pro
 
             var effectiveConfig = config ?? new PerfilConfig { Atajo = hotkey };
 
-            // AHORA PASAMOS LA BANDERA AL SERVICIO
             _processService.ApplyProfile(process, effectiveConfig, isManagedRule);
 
             _currentBaseRank = HotkeyToRank(hotkey);
@@ -1010,7 +1007,6 @@ namespace PlusControl.Pro
 
             if (hotkey != _lastAppliedProfile)
             {
-                // APLICAR PERFIL A PC_F
                 _processService.AplicarPerfilHardware(hotkey);
                 _lastAppliedProfile = hotkey;
 
@@ -1035,7 +1031,6 @@ namespace PlusControl.Pro
             else if (temp <= thermalCfg.TempBaja) { _coolCounter++; _heatCounter = 0; }
             else { _heatCounter = 0; _coolCounter = 0; }
 
-            // Reducir perfil por calor
             if (_heatCounter >= thermalCfg.SegundosAlta)
             {
                 _heatCounter = 0;
@@ -1055,7 +1050,6 @@ namespace PlusControl.Pro
                 }
             }
 
-            // Recuperar perfil por enfriamiento
             if (_coolCounter >= thermalCfg.SegundosBaja)
             {
                 _coolCounter = 0;
@@ -1078,10 +1072,7 @@ namespace PlusControl.Pro
 
         #region === EVENT HANDLERS ===
 
-        private void OnTemperatureChanged(float temp)
-        {
-            // Puede usarse para actualizaciones adicionales en tiempo real
-        }
+        private void OnTemperatureChanged(float temp) { }
 
         private void OnNewLogEvent(EventoHistorial evento)
         {
@@ -1107,8 +1098,6 @@ namespace PlusControl.Pro
 
         private void MainForm_Load(object? sender, EventArgs e)
         {
-            // Solución: Establecemos la prioridad AQUÍ cuando la ventana ya ha cargado 
-            // en el sistema operativo, permitiendo que Windows respete la orden.
             SetApplicationPriority();
 
             if (_configService.Config.IniciarMinimizado)
@@ -1129,7 +1118,6 @@ namespace PlusControl.Pro
                 return;
             }
 
-            // Restaurar procesos gestionados
             if (_configService.Config.RestaurarAlSalir)
             {
                 foreach (var procName in _configService.Config.Reglas.Keys)
@@ -1138,7 +1126,8 @@ namespace PlusControl.Pro
                 }
             }
 
-            // Cleanup
+            _monitorTimer?.Stop();
+            _processTimer?.Stop();
             _hardwareService.Dispose();
             _trayIcon?.Dispose();
             _configService.Save();
@@ -1169,7 +1158,6 @@ namespace PlusControl.Pro
                     _lblTempStatus.ForeColor = Color.Gray;
                 }
 
-                // Actualizar gráfico si existe
                 UpdateChart(temp);
             });
         }
@@ -1208,7 +1196,6 @@ namespace PlusControl.Pro
                     ? Color.FromArgb(80, 200, 255)
                     : Color.White;
 
-            // Usar object pool para evitar allocations
             var bmp = BitmapPool.Get();
             try
             {
@@ -1271,7 +1258,6 @@ namespace PlusControl.Pro
             this.MaximizeBox = false;
             this.Font = new Font("Segoe UI", 9.5f);
 
-            // Título
             var lblTitle = new Label
             {
                 Text = "🖥️ PlusControl PRO",
@@ -1282,7 +1268,6 @@ namespace PlusControl.Pro
             };
             this.Controls.Add(lblTitle);
 
-            // Botón ajustes
             var btnSettings = new Button
             {
                 Text = "⚙️",
@@ -1298,7 +1283,6 @@ namespace PlusControl.Pro
             btnSettings.Click += BtnSettings_Click;
             this.Controls.Add(btnSettings);
 
-            // === PANEL TÉRMICO ===
             var grpThermal = new GroupBox
             {
                 Text = "🌡️ Control Térmico Inteligente",
@@ -1321,19 +1305,10 @@ namespace PlusControl.Pro
             AddThermalControls(grpThermal, bgPanel, textLight);
             this.Controls.Add(grpThermal);
 
-            // === PANEL REGLAS ===
             CreateRulesPanel(bgPanel, textLight, accentBlue);
-
-            // === PANEL HISTORIAL ===
             CreateHistoryPanel(bgPanel, textLight);
-
-            // === GRÁFICO DE TEMPERATURA ===
             CreateChartPanel(bgDark);
-
-            // === STATUS BAR ===
             CreateStatusBar(bgDark);
-
-            // === BOTONES INFERIORES ===
             CreateBottomButtons(accentBlue);
         }
 
@@ -1357,7 +1332,6 @@ namespace PlusControl.Pro
             container.Controls.Add(_numSecLow);
             container.Controls.Add(new Label { Text = "seg", Location = new Point(500, 53), AutoSize = true });
 
-            // Indicador visual de rango
             var lblRange = new Label
             {
                 Text = $"Rango seguro: {cfg.TempBaja}°C - {cfg.TempAlta}°C",
@@ -1378,7 +1352,6 @@ namespace PlusControl.Pro
         {
             this.Controls.Add(new Label { Text = "📋 Reglas de Perfiles PC_F:", Location = new Point(20, 195), AutoSize = true });
 
-            // Lista de reglas
             _lstReglas = new ListBox
             {
                 Location = new Point(20, 220),
@@ -1391,7 +1364,6 @@ namespace PlusControl.Pro
             RefreshRulesList();
             this.Controls.Add(_lstReglas);
 
-            // Selector de perfil default
             this.Controls.Add(new Label { Text = "Por defecto:", Location = new Point(485, 197), AutoSize = true, Font = new Font("Segoe UI", 8) });
             _cmbDefaultProfile = new ComboBox
             {
@@ -1411,7 +1383,6 @@ namespace PlusControl.Pro
             };
             this.Controls.Add(_cmbDefaultProfile);
 
-            // Ajuste Espacial
             int yPos = 415;
             this.Controls.Add(new Label { Text = "Proceso:", Location = new Point(20, yPos + 3), AutoSize = true });
             _txtProceso = new TextBox
@@ -1478,7 +1449,6 @@ namespace PlusControl.Pro
             _btnAffinity.Click += BtnAffinity_Click;
             this.Controls.Add(_btnAffinity);
 
-            // Botones de acción
             yPos += 75;
             _btnAdd = new Button
             {
@@ -1572,7 +1542,6 @@ namespace PlusControl.Pro
             var minTemp = points.Min();
             var range = Math.Max(maxTemp - minTemp, 1);
 
-            // Dibujar línea de temperatura
             using (var pen = new Pen(Color.FromArgb(0, 200, 255), 2))
             {
                 var linePoints = points.Select((t, i) => new PointF(
@@ -1583,7 +1552,6 @@ namespace PlusControl.Pro
                 g.DrawLines(pen, linePoints);
             }
 
-            // Etiquetas
             using (var font = new Font("Segoe UI", 7))
             using (var brush = new SolidBrush(Color.Gray))
             {
@@ -1631,7 +1599,6 @@ namespace PlusControl.Pro
             };
             statusBar.Controls.Add(_lblStats);
 
-            // Timer para actualizar estadísticas
             var statsTimer = new System.Windows.Forms.Timer { Interval = 5000 };
             statsTimer.Tick += (s, e) =>
             {
@@ -1645,7 +1612,6 @@ namespace PlusControl.Pro
 
         private void CreateBottomButtons(Color accentBlue)
         {
-            // Créditos
             this.Controls.Add(new Label
             {
                 Text = "✨ PlusControl PRO v2.0 by Breniak | Arquitectura Enterprise",
@@ -1727,14 +1693,12 @@ namespace PlusControl.Pro
             var cfg = _configService.Config;
             int y = 20;
 
-            // Timings
             form.Controls.Add(CreateSettingRow(form, "Retraso General (ms):", ref y, cfg.DelayGeneral, 0, 10000, out var numDelay));
             form.Controls.Add(CreateSettingRow(form, "Transición Rápida 1↔2 (ms):", ref y, cfg.Delay1y2, 0, 10000, out var numFast));
-            form.Controls.Add(CreateSettingRow(form, "Frecuencia Escaneo (ms):", ref y, cfg.TickRate, 100, 5000, out var numTick));
+            form.Controls.Add(CreateSettingRow(form, "Frecuencia Escaneo Térmico (ms):", ref y, cfg.TickRate, 100, 5000, out var numTick));
 
             y += 10;
 
-            // Checkboxes
             form.Controls.Add(CreateCheckBox(form, "Iniciar minimizado", ref y, cfg.IniciarMinimizado, out var chkMin));
             form.Controls.Add(CreateCheckBox(form, "Cerrar (X) minimiza a bandeja", ref y, cfg.CerrarMinimiza, out var chkClose));
             form.Controls.Add(CreateCheckBox(form, "Siempre visible (TopMost)", ref y, cfg.SiempreArriba, out var chkTop));
@@ -1747,7 +1711,6 @@ namespace PlusControl.Pro
             y += 10;
             form.Controls.Add(CreateSettingRow(form, "Opacidad ventana (%):", ref y, cfg.OpacidadVentana, 30, 100, out var numOpacity));
 
-            // Botón guardar
             var btnSave = new Button
             {
                 Text = "💾 Guardar Ajustes",
@@ -2032,7 +1995,6 @@ namespace PlusControl.Pro
             var process = selectedItem.Substring(0, sepIndex).Trim();
             if (!_configService.Config.Reglas.TryGetValue(process, out var config)) return;
 
-            // Cargar valores en controles
             _txtProceso!.Text = process;
             var profileName = GetProfileName(config.Atajo);
             if (_cmbPerfil!.Items.Contains(profileName)) _cmbPerfil.SelectedItem = profileName;
@@ -2222,9 +2184,6 @@ namespace PlusControl.Pro
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
-            // ==============================================================
-            // FORZAR PRIORIDAD "TIEMPO REAL" DURANTE EL ARRANQUE
-            // ==============================================================
             try
             {
                 using (Process p = Process.GetCurrentProcess())
@@ -2241,9 +2200,8 @@ namespace PlusControl.Pro
             {
                 Application.SetHighDpiMode(HighDpiMode.SystemAware);
             }
-            catch { /* Ignorar en versiones antiguas de .NET Framework */ }
+            catch { }
 
-            // Manejo global de excepciones no capturadas
             AppDomain.CurrentDomain.UnhandledException += (s, e) =>
             {
                 File.AppendAllText("crash.log", $"{DateTime.Now}: {e.ExceptionObject}\n");
